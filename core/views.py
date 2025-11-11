@@ -6,11 +6,8 @@ from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 
-from .models import League, Season, Matchday, Team, Game, Player, Stats, PlayerMetric
-from .serializers import (
-    LeagueSerializer, SeasonSerializer, MatchdaySerializer,
-    TeamSerializer, GameSerializer, PlayerSerializer, StatsSerializer, PlayerMetricSerializer
-)
+from .models import *
+from .serializers import *
 from .core import wrap_response
 from .permissions import (
     IsSuperAdmin, IsSuperAdminOrAdmin, IsSuperAdminOrDataCollector,
@@ -128,6 +125,15 @@ class GameViewSet(viewset_with_wrapper(ModelViewSet)):
             return [IsAuthenticated()]
         return [IsAuthenticated(), IsSuperAdminOrAdmin()]
 
+# class PlayerViewSet(viewset_with_wrapper(ModelViewSet)):
+#     queryset = Player.objects.all()
+#     serializer_class = PlayerSerializer
+
+#     def get_permissions(self):
+#         if self.action in ['list', 'retrieve']:
+#             return [IsAuthenticated()]
+#         return [IsAuthenticated(), IsSuperAdminOrAdmin()]
+# core/views.py
 class PlayerViewSet(viewset_with_wrapper(ModelViewSet)):
     queryset = Player.objects.all()
     serializer_class = PlayerSerializer
@@ -137,63 +143,105 @@ class PlayerViewSet(viewset_with_wrapper(ModelViewSet)):
             return [IsAuthenticated()]
         return [IsAuthenticated(), IsSuperAdminOrAdmin()]
 
-class StatsViewSet(viewset_with_wrapper(ModelViewSet)):
-    queryset = Stats.objects.all()
-    serializer_class = StatsSerializer
+    # ← ADD THIS METHOD
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['game_id'] = self.request.query_params.get('game_id')
+        return context
+    
 
-    def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
-            return [IsAuthenticated()]
-        return [IsAuthenticated(), IsSuperAdminOrDataCollector()]
 
-class PlayerMetricUpdateView(APIView):
+# core/views.py
+class MetricViewSet(viewset_with_wrapper(ModelViewSet)):
+    queryset = Metric.objects.all()
+    serializer_class = MetricSerializer
+    permission_classes = [IsAuthenticated, IsSuperAdminOrAdmin]
+
+
+
+# core/views.py
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.db.models import F
+from .models import PlayerGameStat, Metric
+from .serializers import PlayerGameStatSerializer
+from .permissions import IsSuperAdminOrDataCollector
+from .core import wrap_response  # your wrapper
+
+
+class PlayerGameStatUpdateView(APIView):
     permission_classes = [IsAuthenticated, IsSuperAdminOrDataCollector]
 
-    # Handle GET requests to retrieve all metrics for a player
+    @wrap_response
     def get(self, request):
+        """
+        GET: Retrieve PlayerGameStat records
+        Filters:
+          ?game_id=5
+          ?player_id=10
+          ?game_id=5&player_id=10
+        """
+        game_id = request.query_params.get("game_id")
         player_id = request.query_params.get("player_id")
-        game_id = request.query_params.get("game_id")  # Optional, for filtering by game
 
-        if not player_id:
+        if not game_id and not player_id:
             return Response(
-                {"error": "player_id is required to retrieve metrics."},
+                {"error": "At least one of game_id or player_id is required."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Filter by player and optionally by game
-        filters = {"player": player_id}
+        queryset = PlayerGameStat.objects.all()
+
         if game_id:
-            filters["game"] = game_id
+            queryset = queryset.filter(game_id=game_id)
+        if player_id:
+            queryset = queryset.filter(player_id=player_id)
 
-        metrics = PlayerMetric.objects.filter(**filters)
-        serializer = PlayerMetricSerializer(metrics, many=True)
+        # Optional: order by metric
+        queryset = queryset.select_related('metric', 'player', 'game').order_by('metric__name')
 
+        serializer = PlayerGameStatSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    # Handle POST requests to update a metric
+    @wrap_response
     def post(self, request):
-        # Retrieve the player and metric data
         player_id = request.data.get("player_id")
-        metric = request.data.get("metric")
         game_id = request.data.get("game_id")
-        value = int(request.data.get("value", 1))  # Default to +1 if not specified
+        metric_id = request.data.get("metric_id")
+        value = int(request.data.get("value", 1))
 
-        if not all([player_id, metric, game_id]):
-            return Response({"error": "player_id, metric, and game_id are required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not all([player_id, game_id, metric_id]):
+            return Response(
+                {"error": "player_id, game_id, and metric_id are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
-            # Get or create the PlayerMetric instance
-            player_metric, created = PlayerMetric.objects.get_or_create(
-                game_id=game_id, player_id=player_id, metric=metric
+            metric = Metric.objects.get(id=metric_id)
+        except Metric.DoesNotExist:
+            return Response(
+                {"error": "Invalid metric_id."},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            player_metric.count += value
-            if player_metric.count < 0:
-                player_metric.count = 0  # Prevent negative counts
-            player_metric.save()
 
-            # Optional: Aggregate to Stats model if desired (e.g., update Stats on save)
-            # You could use Django signals for this in models.py
+        stat, created = PlayerGameStat.objects.get_or_create(
+            player_id=player_id,
+            game_id=game_id,
+            metric_id=metric_id,
+            defaults={'count': 0}
+        )
 
-            return Response({"message": "Metric updated successfully!"}, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        stat.count = F('count') + value
+        stat.save()
+        stat.refresh_from_db()
+
+        return Response({
+            "message": f"{metric.name} updated",
+            "player": stat.player.name,
+            "count": stat.count,
+            "game_id": game_id,
+            "metric_id": metric_id
+        }, status=status.HTTP_200_OK)
+
+

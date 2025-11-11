@@ -53,7 +53,7 @@ class Game(models.Model):
     matchday = models.ForeignKey(Matchday, on_delete=models.CASCADE, related_name="games")
     home_team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="home_games")
     away_team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="away_games")
-    date = models.DateField()
+    date = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -91,62 +91,96 @@ class Player(models.Model):
     def __str__(self):
         return f"{self.name} ({self.team.name}) - #{self.jersey_number}"
     
-
-# 7. Stats Model (aggregated per player per game)
-class Stats(models.Model):
-    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="stats")
-    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="stats")
-    goals = models.PositiveIntegerField(default=0)
-    assists = models.PositiveIntegerField(default=0)
-    shots_on_target = models.PositiveIntegerField(default=0)
-    tackles = models.PositiveIntegerField(default=0)
-    interceptions = models.PositiveIntegerField(default=0)
-    passes = models.PositiveIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=['game', 'player'], name='unique_stats_per_player_game')
-        ]
+# core/models.py
+class Metric(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    short_code = models.CharField(max_length=10, unique=True)  # e.g., "SOT", "PASS"
+    description = models.TextField(blank=True)
 
     def __str__(self):
-        return f"Stats for {self.player.name} in {self.game}"
+        return f"{self.name} ({self.short_code})"
+    
 
-# 8. PlayerMetric Model (for real-time metric collection)
-class PlayerMetric(models.Model):
-    METRIC_CHOICES = [
-        ('goal', 'Goal'),
-        ('assist', 'Assist'),  # Added this to match Stats
-        ('pass', 'Pass'),
-        ('sot', 'Shot On Target'),
-        ('tackle', 'Tackle'),
-        ('interception', 'Interception'),
-    ]
+# core/models.py
+class PlayerGameStat(models.Model):
     game = models.ForeignKey(Game, on_delete=models.CASCADE)
     player = models.ForeignKey(Player, on_delete=models.CASCADE)
-    metric = models.CharField(max_length=20, choices=METRIC_CHOICES)
-    count = models.IntegerField(default=0)
+    metric = models.ForeignKey(Metric, on_delete=models.CASCADE)
+    count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=['game', 'player', 'metric'], name='unique_metric_per_player_game')
+            models.UniqueConstraint(
+                fields=['game', 'player', 'metric'],
+                name='unique_player_stat_per_game'
+            )
+        ]
+        indexes = [
+            models.Index(fields=['game', 'player']),
+            models.Index(fields=['metric']),
         ]
 
     def __str__(self):
-        return f"{self.player.name} - {self.metric}: {self.count}"
+        return f"{self.player} - {self.metric}: {self.count} ({self.game})"
+    
+
+# # 7. Stats Model (aggregated per player per game)
+# class Stats(models.Model):
+#     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="stats")
+#     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="stats")
+#     goals = models.PositiveIntegerField(default=0)
+#     assists = models.PositiveIntegerField(default=0)
+#     shots_on_target = models.PositiveIntegerField(default=0)
+#     tackles = models.PositiveIntegerField(default=0)
+#     interceptions = models.PositiveIntegerField(default=0)
+#     passes = models.PositiveIntegerField(default=0)
+#     created_at = models.DateTimeField(auto_now_add=True)
+
+#     class Meta:
+#         constraints = [
+#             models.UniqueConstraint(fields=['game', 'player'], name='unique_stats_per_player_game')
+#         ]
+
+#     def __str__(self):
+#         return f"Stats for {self.player.name} in {self.game}"
+
+# # 8. PlayerMetric Model (for real-time metric collection)
+# class PlayerMetric(models.Model):
+#     METRIC_CHOICES = [
+#         ('goal', 'Goal'),
+#         ('assist', 'Assist'),  # Added this to match Stats
+#         ('pass', 'Pass'),
+#         ('sot', 'Shot On Target'),
+#         ('tackle', 'Tackle'),
+#         ('interception', 'Interception'),
+#     ]
+#     game = models.ForeignKey(Game, on_delete=models.CASCADE)
+#     player = models.ForeignKey(Player, on_delete=models.CASCADE)
+#     metric = models.CharField(max_length=20, choices=METRIC_CHOICES)
+#     count = models.IntegerField(default=0)
+#     created_at = models.DateTimeField(auto_now_add=True)
+
+#     class Meta:
+#         constraints = [
+#             models.UniqueConstraint(fields=['game', 'player', 'metric'], name='unique_metric_per_player_game')
+#         ]
+
+#     def __str__(self):
+#         return f"{self.player.name} - {self.metric}: {self.count}"
     
 
 
-from django.db.models.signals import post_save
-from django.dispatch import receiver
+# from django.db.models.signals import post_save
+# from django.dispatch import receiver
 
-@receiver(post_save, sender=PlayerMetric)
-def update_stats(sender, instance, **kwargs):
-    stats, created = Stats.objects.get_or_create(game=instance.game, player=instance.player)
-    if instance.metric == 'goal':
-        stats.goals = instance.count
-    elif instance.metric == 'assist':
-        stats.assists = instance.count
-    # Add similar for others
-    stats.save()
+# @receiver(post_save, sender=PlayerMetric)
+# def update_stats(sender, instance, **kwargs):
+    # stats, created = Stats.objects.get_or_create(game=instance.game, player=instance.player)
+    # if instance.metric == 'goal':
+    #     stats.goals = instance.count
+    # elif instance.metric == 'assist':
+    #     stats.assists = instance.count
+    # # Add similar for others
+    # stats.save()

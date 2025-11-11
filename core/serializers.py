@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import League, Season, Matchday, Team, Game, Player, Stats, PlayerMetric
+from .models import *
 from django.contrib.auth.models import User, Group
 
 # yourapp/serializers.py   (add / replace)
@@ -72,17 +72,55 @@ class GameSerializer(serializers.ModelSerializer):
         model = Game
         fields = '__all__'
 
+
+# core/serializers.py
+class MetricSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Metric
+        fields = ['id', 'name', 'short_code', 'description']
+
+
+# class PlayerGameStatSerializer(serializers.ModelSerializer):
+#     metric = MetricSerializer(read_only=True)
+#     metric_id = serializers.IntegerField(write_only=True)
+
+#     class Meta:
+#         model = PlayerGameStat
+#         fields = ['id', 'metric', 'metric_id', 'count', 'created_at', 'updated_at']
+
+# core/serializers.py
+class PlayerGameStatSerializer(serializers.ModelSerializer):
+    metric = serializers.CharField(source='metric.name')
+    metric_short_code = serializers.CharField(source='metric.short_code')
+    player_name = serializers.CharField(source='player.name')
+    player_jersey = serializers.IntegerField(source='player.jersey_number')
+    game_date = serializers.DateTimeField(source='game.date', format="%Y-%m-%d %H:%M")
+
+    class Meta:
+        model = PlayerGameStat
+        fields = [
+            'id', 'player_name', 'player_jersey',
+            'metric', 'metric_short_code',
+            'count', 'game_date', 'created_at', 'updated_at'
+        ]
+
 class PlayerSerializer(serializers.ModelSerializer):
+    stats = serializers.SerializerMethodField()
+
     class Meta:
         model = Player
-        fields = '__all__'
+        fields = ['id', 'name', 'team', 'position', 'jersey_number', 'stats']
 
-class StatsSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Stats
-        fields = '__all__'
+    def get_stats(self, obj):
+        game_id = self.context.get('game_id')
+        if not game_id:
+            return {}
 
-class PlayerMetricSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PlayerMetric
-        fields = '__all__'
+        stats = PlayerGameStat.objects.filter(player=obj, game_id=game_id)
+        return {
+            stat.metric.short_code.lower(): stat.count
+            for stat in stats
+        }
+    
+
+
